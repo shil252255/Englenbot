@@ -1,6 +1,5 @@
-
 import csv
-from main import psql_command
+from psql_moduls import psql_command
 
 with open('dict 1.csv', 'r', encoding='UTF8') as df:
     spamreader = csv.reader(df)
