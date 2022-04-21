@@ -1,45 +1,61 @@
 from yt_dlp import YoutubeDL
 import os
 import webvtt
-from collections import Counter
-import translators
-from psql_moduls import psql_command
+# import translators
 
-DIR_NAME = 'Downloads/'
+DIR_NAME = 'Downloads/'  # В функциях не правильно используется это значение
 id_video = 'dQYfflJ4V5Q'
-ydl_opts = {'outtmpl': f'/{DIR_NAME}%(title)s_{id_video}.mp4',
-            'format': '(bestvideo[width>=1080][ext=mp4]/bestvideo)+bestaudio/best',
-            'writesubtitles': True,
-            'subtitle': '--write-sub --sub-lang en'}
 
 
-def download_file():
+def download_subtitles(video_id: str, path: str = '') -> str:
+    """
+    :param path:
+    :param video_id: use youtube video ID;
+    :return: name subtitles file if successfully downloaded;
+    """
+    vid_url = f'https://www.youtube.com/watch?v={video_id}'
+    ydl_opts = {
+        'outtmpl': f'/{path}{video_id}',
+        'writesubtitles': True,
+        'subtitle': '--write-sub --sub-lang en',
+        'skip_download': True
+    }
     with YoutubeDL(ydl_opts) as ydl:
-        ydl.download([f'https://www.youtube.com/watch?v={id_video}'])
+        ydl.download([vid_url])
+    return path + get_true_subtitles_file_name(video_id, path)
 
 
-file_names = os.listdir(DIR_NAME)
-file_name = [file_name for file_name in file_names if id_video in file_name and '.vtt' in file_name][0]
+def get_true_subtitles_file_name(video_id: str,  path: str = '') -> str:
+    """
+    Returns a string with the filename containing the passed ID value;
+    :param path:
+    :param video_id:
+    :return:
+    """
+    file_names = list(filter(lambda file_name: video_id in file_name, os.listdir(path)))
+    if not file_names:
+        raise FileNotFoundError('No subtitles file for ID.')
+    elif len(file_names) > 1:
+        raise Exception(
+            'Found multiple matches in filenames. Advise you to check the contents of the download folder.'
+        )
+    return file_names[0]
 
-all_sub = ''
-for subtitles in webvtt.read(f'{DIR_NAME}{file_name}'):
-    all_sub += ' ' + subtitles.text.lower()
-all_sub = ''.join([char for char in all_sub if char in "abcdefghijklmnopqrstuvwxyz '"])
 
-all_words = all_sub.split()
+def get_all_words_from_subs_file(file_path: str) -> list:
+    """
+    :param file_path:
+    :return:
+    """
+    subs = ' '.join([caption.text.lower() for caption in webvtt.read(file_path)])
+    subs = ''.join([char for char in subs if char in "abcdefghijklmnopqrstuvwxyz ` "])
+    return list(set(subs.split()))
 
-all_uniq_words = [word[0] for word in Counter(all_words).most_common()]
-translate_words = translators.google('\n'.join(all_uniq_words).split('\n'))
 
-print(len(all_uniq_words))
-print(len(translate_words))
-
-for word, num in enumerate(all_uniq_words):
-    psql_command(f"INSERT INTO eng_words(word, short_rus_translation)"
-                 f"VALUES("
-                 f"'{word}',"
-                 f"'{translate_words[num]}');")
+def main():
+    all_words = get_all_words_from_subs_file(download_subtitles(id_video, DIR_NAME))
+    print(all_words)
 
 
 if __name__ == '__main__':
-    pass
+    main()
