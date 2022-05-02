@@ -1,33 +1,23 @@
-from config import TG_API_KEY, LANG, LEARNING_PULL, COUNT_OF_VARIANTS
+from config import *
 from aiogram import Bot, types
 from aiogram.dispatcher import Dispatcher
 from aiogram.utils import executor
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, \
     InlineKeyboardButton
-import json
 import random
-from psql_moduls import psql_command
+from psql_modul import select_from_db, insert_to_db, command_for_db, count_from_db
 from datetime import datetime
+from typing import Final
 
 
 bot = Bot(TG_API_KEY)
 dispatcher = Dispatcher(bot)
 training_now = {}
-ENG_WORDS = psql_command(f'SELECT * FROM eng_words')
-
-with open(f'{LANG}.json', 'r', encoding='utf-8') as file:
-    messages_dict = json.load(file)
-
-main_kb = ReplyKeyboardMarkup()
-main_kb.add(KeyboardButton("/start_training")).add(KeyboardButton("/status")).add(KeyboardButton("/help"))
+ENG_WORDS: Final = select_from_db('eng_words')
 
 
-async def add_word_question(user_id: int):
-    """
-    :param user_id:
-    :return:
-    """
-    all_user_learning_words_ids = psql_command(f'SELECT word_id FROM users_progress WHERE user_id = {user_id}')
+async def add_word_question(user_id: int):  # этот подход к добавлению слов мне не нравиться егополностью переделать
+    all_user_learning_words_ids = select_from_db('users_progress', 'word_id', where=f'user_id = {user_id}')
     word_info = None
     for word_info in ENG_WORDS:
         if word_info[0] not in all_user_learning_words_ids:
@@ -46,31 +36,30 @@ async def training_word_question(user_id: int, main_word: list, variants):
     training_now[user_id] = main_word
 
 
-def count_learning_words(user_id: int) -> int:
-    return int(psql_command(f'SELECT count(*) FROM users_progress WHERE user_id = {user_id}AND status < 10')[0])
+def count_learning_words(user_id: int | str) -> int:
+    return count_from_db(USERS_PROGRESS_TABLE, f'user_id = {user_id}AND status < 10')
 
 
-def count_training_words(user_id: int|str) -> int:
-    return int(psql_command(f'SELECT count(*) FROM users_progress '
-                            f'WHERE user_id = {user_id}AND next_training < NOW()')[0])
+def count_training_words(user_id: int | str) -> int:
+    return count_from_db(USERS_PROGRESS_TABLE, f'user_id = {user_id}AND next_training < NOW()')
 
 
 def add_word_into_bd(user_id: int | str, word_id: int | str, status: int | str) -> None:
-    all_learning_words = psql_command(f'SELECT word_id FROM users_progress WHERE user_id = {user_id}')
+    all_learning_words = command_for_db(f'SELECT word_id FROM users_progress WHERE user_id = {user_id}')
     if int(word_id) not in all_learning_words:
-        psql_command(f"INSERT INTO users_progress(user_id, word_id, status, next_training)"
+        command_for_db(f"INSERT INTO users_progress(user_id, word_id, status, next_training)"
                      f"VALUES({user_id}, {word_id}, {status}, now() + interval '{2**int(status)} minutes');")
 
 
 async def training_word(user_id: str | int):
-    training_pull = psql_command(f"SELECT word_id, last_result, eng_words.word, "
+    training_pull = command_for_db(f"SELECT word_id, last_result, eng_words.word, "
                                  f"eng_words.short_rus_translation, status, next_training "
                                  f"FROM users_progress "
                                  f"LEFT JOIN eng_words ON users_progress.word_id = eng_words.id "
                                  f"WHERE user_id = {user_id}"
                                  f"ORDER BY next_training, status, word_id;")
     if not training_pull or training_pull[0][5] > datetime.now().astimezone():
-        await bot.send_message(user_id, "You didn't have words to training now", reply_markup=main_kb)
+        await bot.send_message(user_id, "You didn't have words to training now")
         training_now.pop(user_id, None)
         return
     main_word = training_pull.pop(0)
@@ -78,7 +67,7 @@ async def training_word(user_id: str | int):
     if main_word[1]:
         variants.append([int(main_word[1].split('_')[0]), main_word[1].split('_')[1]])
     if len(training_pull) < COUNT_OF_VARIANTS:
-        training_pull.append(psql_command(f"SELECT id, null, word, short_rus_translation FROM eng_words "))
+        training_pull.append(command_for_db(f"SELECT id, null, word, short_rus_translation FROM eng_words "))
     while len(variants) < COUNT_OF_VARIANTS:
         variant = random.choice(training_pull)
         if variant not in variants:
@@ -90,37 +79,12 @@ async def training_word(user_id: str | int):
 @dispatcher.message_handler(commands=['start'])
 async def process_start_command(message: types.Message):
     await message.answer(messages_dict['say_hello'])
-    all_users_tg_id = psql_command("SELECT id FROM elb_users")
-    if message["from"]["id"] not in all_users_tg_id:
-        psql_command(f"INSERT INTO elb_users(id, is_bot, first_name, last_name, username, language_code, reg_date)"
-                     f"VALUES ("
-                     f'{message["from"]["id"]}, '
-                     f'{message["from"]["is_bot"]}, '
-                     f"'{message['from']['first_name']}', "
-                     f"'{message['from']['last_name']}', "
-                     f"'{message['from']['username']}', "
-                     f"'{message['from']['language_code']}', "
-                     f"'{message['date']}'"
-                     f')')
+    insert_to_db(USERS_TABLE, dict(message.from_user) | {"reg_date": message.date})
 
 
 @dispatcher.message_handler(commands=['help'])
 async def process_help_command(message: types.Message):
     await message.answer(messages_dict['help'])
-
-
-@dispatcher.message_handler(lambda message: message.from_user.id in training_now and "/" not in message.text)
-async def process_help_command(message: types.Message):
-    if message.text == training_now[message.from_user.id][3]:
-        await message.answer(random.choice(messages_dict["right answer"]))
-        status = training_now[message.from_user.id][4] + 1
-    else:
-        await message.answer(random.choice(messages_dict["wrong answer"]))
-        status = 0
-    psql_command(f"UPDATE users_progress SET status = {status}, "
-                 f"next_training = now() + interval '{2**int(status)} minutes'"
-                 f"WHERE user_id = {message.from_user.id} AND word_id = {training_now[message.from_user.id][0]};")
-    await training_word(message.from_user.id)
 
 
 @dispatcher.message_handler(commands=['start_training'])
@@ -136,6 +100,20 @@ async def process_start_training_command(message: types.Message):
         await training_word(message.from_user.id)
 
 
+@dispatcher.message_handler(lambda message: message.from_user.id in training_now and "/" not in message.text)
+async def process_training_answers(message: types.Message):
+    if message.text == training_now[message.from_user.id][3]:
+        await message.answer(random.choice(messages_dict["right answer"]))
+        status = training_now[message.from_user.id][4] + 1
+    else:
+        await message.answer(random.choice(messages_dict["wrong answer"]))
+        status = 0
+    command_for_db(f"UPDATE users_progress SET status = {status}, "
+                   f"next_training = now() + interval '{2**int(status)} minutes'"
+                   f"WHERE user_id = {message.from_user.id} AND word_id = {training_now[message.from_user.id][0]};")
+    await training_word(message.from_user.id)
+
+
 @dispatcher.callback_query_handler(lambda c: "add_wd_" in c.data)
 async def process_callback(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
@@ -146,3 +124,8 @@ async def process_callback(callback_query: types.CallbackQuery):
 
 if __name__ == '__main__':
     executor.start_polling(dispatcher)
+
+    """
+    Всего 11 функций.
+    причесаны 3/11
+    """

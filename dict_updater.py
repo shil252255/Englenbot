@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from config import PSQL_HOST, PSQL_USER_PASS, PSQL_USER_NAME, BD_NAME, PSQL_PORT
 
 
-def add_df_to_bd(data: pd.DataFrame, table_name) -> None:
+def add_df_to_bd(data: pd.DataFrame, table_name: str) -> None:
     conn_string = f'postgresql://{PSQL_USER_NAME}:{PSQL_USER_PASS}@{PSQL_HOST}:{PSQL_PORT}/{BD_NAME}'
     db = create_engine(conn_string)
     conn = db.connect()
